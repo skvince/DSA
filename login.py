@@ -4,7 +4,7 @@ import os
 import sys
 import subprocess
 from PIL import Image, ImageTk
-from database import Database
+from database import Database, hash_password
 
 def handle_login():
     username = email_input.get().strip()
@@ -12,13 +12,10 @@ def handle_login():
     db = Database()
     python_exe = sys.executable
     if username == "admin" and password == "123":
+        db.add_audit_log(1, "admin", "Admin", "All", "Login", "Admin logged in")
         root.destroy()
         subprocess.run([python_exe, "admin.py"])
     else:
-        # Support usernames like:
-        # - 12 (numeric id)
-        # - T-012 (teacher id)
-        # - S-012 (student id)
         raw = username.replace(" ", "")
         role_prefix = None
         if raw.upper().startswith("T-"):
@@ -31,33 +28,33 @@ def handle_login():
         if raw.isdigit():
             uid = int(raw)
 
-            # If prefix says teacher/student, only try that table.
             if role_prefix in (None, "T"):
                 teacher = db.cursor.execute(
-                    "SELECT id, firstname, lastname, password FROM teachers WHERE id=?",
+                    "SELECT id, firstname, middlename, lastname, password FROM teachers WHERE id=?",
                     (uid,)
                 ).fetchone()
-                if teacher and teacher[3] is not None and teacher[3] == password:
-                    t_name = f"{teacher[1]} {teacher[2]}"
+                if teacher and teacher[4] is not None and teacher[4] == hash_password(password):
+                    t_name = f"{teacher[1]} {(teacher[2] or '').strip()} {teacher[3]}".replace("  ", " ").strip()
+                    dept = db.cursor.execute("SELECT dept_name FROM departments WHERE id=(SELECT dept_id FROM teachers WHERE id=?)", (uid,)).fetchone()
+                    dept_name = dept[0] if dept else "Unknown"
+                    db.add_audit_log(uid, t_name, "Teacher", dept_name, "Login", "Teacher logged in")
                     root.destroy()
                     subprocess.run([python_exe, "teacher.py", str(teacher[0]), t_name])
                     return
 
             if role_prefix in (None, "S"):
                 student = db.cursor.execute(
-                    "SELECT id, firstname, lastname, password FROM students WHERE id=?",
+                    "SELECT id, firstname, middlename, lastname, password FROM students WHERE id=?",
                     (uid,)
                 ).fetchone()
-                if student and student[3] is not None and student[3] == password:
-                    s_name = f"{student[1]} {student[2]}"
+                if student and student[4] is not None and student[4] == hash_password(password):
+                    s_name = f"{student[1]} {(student[2] or '').strip()} {student[3]}".replace("  ", " ").strip()
+                    db.add_audit_log(uid, s_name, "Student", "N/A", "Login", "Student logged in")
                     root.destroy()
                     subprocess.run([python_exe, "student.py", str(student[0]), s_name])
                     return
 
             messagebox.showerror("Error", "Invalid ID or Password")
-        else:
-            messagebox.showerror("Error", "Invalid Username or Password")
-        messagebox.showerror("Error", "Invalid Username or Password")
 
 # Initialize main window
 root = tk.Tk()
@@ -108,7 +105,7 @@ try:
     
     # Render the actual image logo on the left
     logo_label = tk.Label(header_frame, image=logo_photo, bg="#f5f5f5")
-    logo_label.image = logo_photo  # Maintain explicit reference
+    logo_label.image = logo_photo  # type: ignore[attr-defined]
     logo_label.pack(side="left", padx=(0, 15))
 except Exception as e:
     # Safe fallback canvas if the file isn't found
